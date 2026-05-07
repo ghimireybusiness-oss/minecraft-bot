@@ -13,6 +13,13 @@
     "minIntervalMs": 15000,
     "maxIntervalMs": 30000
   },
+  "antiBot": {
+    "enabled": true,
+    "minDelayMs": 2000,
+    "maxDelayMs": 5000,
+    "minMoveDelayMs": 1000,
+    "maxMoveDelayMs": 3000
+  },
   "joinSequence": {
     "enabled": true,
     "password": "haha1223",
