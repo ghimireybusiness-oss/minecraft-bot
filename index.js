@@ -5,6 +5,8 @@
  * - Listens to in-game chat from a configured "owner" and runs commands
  *   (!follow, !stop, !come, !jump, !say <message>) using mineflayer-pathfinder.
  * - Anti-AFK: looks around / hops every few seconds.
+ * - Anti-bot detection bypass: waits and moves naturally before performing actions.
+ * - Death recovery: automatically uses /back command when bot dies.
  * - Auto-reconnect on disconnect/kick/error.
  * - Optional join sequence for AuthMe-style servers
  *   (/register on first join, /login afterwards, then /server <name>, /tpa <owner>, ...).
@@ -37,6 +39,7 @@ const RECONNECT_DELAY = Number(config.reconnectDelayMs) || 5000;
 const PREFIX = config.prefix || '!';
 const OWNER = (config.owner || '').trim();
 const ANTI_AFK = config.antiAfk || { enabled: true, minIntervalMs: 15000, maxIntervalMs: 30000 };
+const ANTI_BOT = config.antiBot || { enabled: true, minDelayMs: 2000, maxDelayMs: 5000, minMoveDelayMs: 1000, maxMoveDelayMs: 3000 };
 const JOIN_SEQ = config.joinSequence || { enabled: false };
 const WEB_PORT = Number(process.env.PORT) || Number(config.webPort) || 3000;
 
@@ -180,6 +183,43 @@ const botManager = {
 };
 
 // ---------------------------------------------------------------------------
+// Anti-bot detection bypass: simulate natural player behavior
+// ---------------------------------------------------------------------------
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+async function performActionWithAntiBot(bot, action) {
+  if (!ANTI_BOT.enabled) {
+    // If anti-bot is disabled, perform action immediately
+    return action();
+  }
+
+  try {
+    // Initial wait before performing the action
+    const initialWait = randInt(ANTI_BOT.minDelayMs || 2000, ANTI_BOT.maxDelayMs || 5000);
+    log(`[Anti-bot] Waiting ${initialWait}ms before action...`);
+    await sleep(initialWait);
+
+    // Perform a natural movement to appear like a real player
+    if (bot && bot.entity) {
+      const yaw = Math.random() * Math.PI * 2;
+      const pitch = (Math.random() - 0.5) * (Math.PI / 4);
+      bot.look(yaw, pitch, true).catch(() => {});
+
+      // Small delay for movement
+      const moveDelay = randInt(ANTI_BOT.minMoveDelayMs || 1000, ANTI_BOT.maxMoveDelayMs || 3000);
+      await sleep(moveDelay);
+    }
+
+    // Now perform the actual action
+    log('[Anti-bot] Performing action...');
+    return action();
+  } catch (err) {
+    log('[Anti-bot] Error during action:', err && err.message ? err.message : err);
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Bot factory (creates a fresh bot every (re)connect)
 // ---------------------------------------------------------------------------
 function createBot() {
@@ -225,6 +265,16 @@ function createBot() {
 
   newBot.on('health', () => {
     if (newBot.health <= 5) log(`Low health: ${newBot.health}/20`);
+  });
+
+  // -------------------------------------------------------------------------
+  // Death handling: use /back command
+  // -------------------------------------------------------------------------
+  newBot.on('death', () => {
+    log('Bot died! Attempting to use /back command...');
+    performActionWithAntiBot(newBot, async () => {
+      newBot.chat('/back');
+    }).catch((err) => log('Failed to execute /back command:', err && err.message ? err.message : err));
   });
 
   // -------------------------------------------------------------------------
@@ -297,36 +347,46 @@ function handleCommand(bot, username, cmd, args) {
 
   switch (cmd) {
     case 'follow': {
-      const target = bot.players[username] && bot.players[username].entity;
-      if (!target) { bot.chat("I can't see you — get closer so I can find you."); return; }
-      isFollowing = true;
-      followTarget = username;
-      bot.pathfinder.setGoal(new goals.GoalFollow(target, 1), true);
-      bot.chat(`Following ${username}.`);
+      performActionWithAntiBot(bot, async () => {
+        const target = bot.players[username] && bot.players[username].entity;
+        if (!target) { bot.chat("I can't see you — get closer so I can find you."); return; }
+        isFollowing = true;
+        followTarget = username;
+        bot.pathfinder.setGoal(new goals.GoalFollow(target, 1), true);
+        bot.chat(`Following ${username}.`);
+      }).catch((err) => log('Follow command error:', err && err.message ? err.message : err));
       break;
     }
     case 'stop': {
-      stopFollowing(bot);
-      bot.chat('Stopped.');
+      performActionWithAntiBot(bot, async () => {
+        stopFollowing(bot);
+        bot.chat('Stopped.');
+      }).catch((err) => log('Stop command error:', err && err.message ? err.message : err));
       break;
     }
     case 'come': {
-      const target = bot.players[username] && bot.players[username].entity;
-      if (!target) { bot.chat("I can't see you yet."); return; }
-      const { x, y, z } = target.position;
-      bot.pathfinder.setGoal(new goals.GoalNear(x, y, z, 1));
-      bot.chat(`On my way to ${username}.`);
+      performActionWithAntiBot(bot, async () => {
+        const target = bot.players[username] && bot.players[username].entity;
+        if (!target) { bot.chat("I can't see you yet."); return; }
+        const { x, y, z } = target.position;
+        bot.pathfinder.setGoal(new goals.GoalNear(x, y, z, 1));
+        bot.chat(`On my way to ${username}.`);
+      }).catch((err) => log('Come command error:', err && err.message ? err.message : err));
       break;
     }
     case 'jump': {
-      bot.setControlState('jump', true);
-      setTimeout(() => bot.setControlState('jump', false), 250);
+      performActionWithAntiBot(bot, async () => {
+        bot.setControlState('jump', true);
+        setTimeout(() => bot.setControlState('jump', false), 250);
+      }).catch((err) => log('Jump command error:', err && err.message ? err.message : err));
       break;
     }
     case 'say': {
-      const message = args.join(' ').trim();
-      if (!message) { bot.chat('Usage: !say <message>'); return; }
-      bot.chat(message);
+      performActionWithAntiBot(bot, async () => {
+        const message = args.join(' ').trim();
+        if (!message) { bot.chat('Usage: !say <message>'); return; }
+        bot.chat(message);
+      }).catch((err) => log('Say command error:', err && err.message ? err.message : err));
       break;
     }
     default:
@@ -344,7 +404,6 @@ function stopFollowing(bot) {
 // Join sequence: /register on first join, /login afterwards, then any
 // configured "afterLoginCommands" (e.g. /server survival, /tpa <owner>).
 // ---------------------------------------------------------------------------
-function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 function fillTemplate(str, vars) {
   return str.replace(/\{(\w+)\}/g, (_, k) => (k in vars ? vars[k] : `{${k}}`));
 }
