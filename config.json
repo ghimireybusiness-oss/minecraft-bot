@@ -1,5 +1,5 @@
 {
-  "host": "play.arctixmc.net",
+  "host": "infinitynp.fun",
   "port": 25565,
   "username": "SenpaiSkeleton",
   "owner": "AgentNP",
@@ -27,7 +27,7 @@
     "loginCommand": "/login {password}",
     "afterLoginCommands": [
       "/server survival",
-      "/tpa AgentNP"
+      "/warp afk"
     ],
     "initialDelayMs": 2000,
     "stepDelayMs": 2500
